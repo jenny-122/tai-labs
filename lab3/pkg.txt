@@ -1,0 +1,13 @@
+# Core Deep Learning: PyTorch (requires a compatible version of torch and torchvision)
+torch==2.3.1
+torchvision==0.18.1
+
+# Scientific Computing / Data Handling
+numpy==1.26.4
+matplotlib==3.10.7
+
+# Utilities
+tqdm==4.67.1
+
+# Profiling Library (Less maintained, pinning to the last release for stability)
+torchprofile==0.0.4
