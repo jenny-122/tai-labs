@@ -11,3 +11,6 @@ tqdm==4.67.1
 
 # Profiling Library (Less maintained, pinning to the last release for stability)
 torchprofile==0.0.4
+
+# Running
+ipykernel==7.1.0
