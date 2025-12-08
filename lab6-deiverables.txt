@@ -1,0 +1,28 @@
+
+1
+
+Latency/energy predictor design and training I
+
+Latency and Energy Profiling
+
+Predictor Design
+
+Predictor Design
+
+Submission Requirements
+
+    •Design a model to learn the correlation between kernel configurations and kernel energy consumption.
+
+    •Submit the model and performance report:
+
+        •The model you designed, and why you want to use this model.
+
+        •The training overhead of your model.
+
+        •How many samples you used for training and evaluation.
+
+        •The accuracy your model achieved.
+
+Submission deadline: 10/24/2025 11:59 PM.
+
+The model and the report named by predictor_xxxx and Model_performance_report_xxxx.pdf

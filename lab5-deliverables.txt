@@ -1,0 +1,35 @@
+
+
+
+
+1
+
+Latency and energy profiling and data collection
+
+Latency and Energy Profiling
+
+<number>
+
+What Prompt Patterns make On-Device LLM Inference energy efficient
+
+<number>
+
+<number>
+
+What Prompt Patterns make On-Device LLM Inference energy efficient
+
+<number>
+
+<number>
+
+What Prompt Patterns make On-Device LLM Inference energy efficient
+
+<number>
+
+<number>
+
+<number>
+
+Submission Requirements
+
+    •No submission

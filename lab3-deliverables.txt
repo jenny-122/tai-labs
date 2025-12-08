@@ -1,0 +1,12 @@
+
+
+DNN model compression I
+
+Assignment Lab 3
+
+Submission Requirements
+
+    •Due: 10/3/2025, 11:59 PM
+
+    •Deliverable: Submit a single PDF that includes your notebook code and outputs.
+    Filename: Lab3_YourName.pdf (Example: Lab3_XiaolongTu.pdf)

@@ -1,0 +1,73 @@
+
+
+
+
+1
+
+Goal & Outcomes
+
+Lab Overview
+
+Experimental Setup
+
+    •Devices: Pixel 7/8 (preferred) or laptop CPU
+
+    •Software: MLC-LLM, Perfetto (for Android device), or other energy/power profiling tools.
+
+    •Environment control: fix brightness, use Wi-Fi connection, close unrelated apps, fix CPU/GPU frequency.
+
+Controlling Prompt and Generation Tokens
+
+    •PT (Prompt Tokens). You can ask ChatGPT to help you generate the prompts with different length.
+
+        •prompt_64  = "What is AI?"                # ~10 tokens
+
+        •prompt_256 = "Explain the history, key methods, and modern advances in AI." * 5
+
+        •prompt_512 = "Explain..." * 10
+
+    •GT (Generated Tokens)
+
+        •max_new_tokens
+
+        •Example:
+
+        •outputs = model.generate(prompt, max_new_tokens=64)
+
+Data Collection Procedure
+
+    •Select PT ∈ {64, 256, 512, 1024}, GT ∈ {16, 64, 128}.
+
+    •Run inference 3 times per setting.
+
+    •Measure energy (mJ) and latency (s).
+
+    •Record in CSV: PT, GT, Energy(mJ), Latency(s).
+
+Simple Energy Predictor
+
+    •
+
+Visualization
+
+    •Show plots:
+
+        Energy vs PT for fixed GT
+
+        Energy vs GT for fixed PT
+
+        Predicted vs Measured Energy
+
+        Tools: matplotlib.
+
+Deliverables
+
+    •Submission deadline: 10/31/2025 11:59 PM.
+
+    •Submit:
+
+        Code notebook (.ipynb)
+
+        Result CSV (energy data)
+
+        1–2 page report with plots and discussion.
