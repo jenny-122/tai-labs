@@ -1,56 +1,9 @@
-# %% [markdown]
-# # **Lab 3: DNN model compression I**
-# # **Acknowledgment: Materials are based on MIT 6.5940 EfficientML.ai (Lab 1: Pruning).**
-# https://colab.research.google.com/drive/1Fagq3JQBzCizodyxpHKvWDzfCC7F1RWN
-
-# %% [markdown]
-#
-# This colab notebook provides code and a framework for ***Lab 1 Pruning***. You can work out your solutions here.
-#
-#
-
-# %% [markdown]
-# Please fill out this [feedback form](https://forms.gle/8gY5n9w1K3gddVoX9) when you finished this lab. We would love to hear your thoughts or feedback on how we can improve this lab!
-
-# %% [markdown]
-# ## Goals
-#
-# In this assignment, you will practice pruning a classical neural network model to reduce both model size and latency. The goals of this assignment are as follows:
-#
-# - Understand the basic concept of **pruning**
-# - Implement and apply **fine-grained pruning**
-# - Implement and apply **channel pruning**
-# - Get a basic understanding of performance improvement (such as speedup) from pruning
-# - Understand the differences and tradeoffs between these pruning approaches
-
-# %% [markdown]
-# ## Contents
-#
-# There are two main sections in this lab: ***Fine-grained Pruning*** and ***Channel Pruning***.
-#
-# There are ***9*** questions in total:
-# - For *Fine-grained Pruning*, there are ***5*** questions (Question 1-5).
-# - For *Channel Pruning*, there are ***3*** questions (Question 6-8).
-# - Question 9 compares fine-grained pruning and channel pruning.
-
-# %% [markdown]
-# # Setup
-
-# %% [markdown]
-# First, install the required packages and download the datasets and pretrained model. Here we use CIFAR10 dataset and VGG network which is the same as what we used in the Lab 0 tutorial.
-
-# %%
-print('Installing torchprofile...')
-!pip install torchprofile 1>/dev/null
-print('All required packages have been successfully installed!')
-
-# %%
 import copy
 import math
 import random
 import time
 from collections import OrderedDict, defaultdict
-from typing import Union, List
+from typing import List, Union
 
 import numpy as np
 import torch
@@ -64,21 +17,20 @@ from torchvision.datasets import *
 from torchvision.transforms import *
 from tqdm.auto import tqdm
 
-from torchprofile import profile_macs
-
-assert torch.cuda.is_available(), # change this line if you want to run on CPU.
-
-# %%
+assert torch.backends.mps.is_available(), "MPS not available. Running on CPU."
 random.seed(0)
 np.random.seed(0)
 torch.manual_seed(0)
 
-# %%
-def download_url(url, model_dir='.', overwrite=False):
-    import os, sys, ssl
+
+def download_url(url, model_dir=".", overwrite=False):
+    import os
+    import ssl
+    import sys
     from urllib.request import urlretrieve
+
     ssl._create_default_https_context = ssl._create_unverified_context
-    target_dir = url.split('/')[-1]
+    target_dir = url.split("/")[-1]
     model_dir = os.path.expanduser(model_dir)
     try:
         if not os.path.exists(model_dir):
@@ -91,118 +43,113 @@ def download_url(url, model_dir='.', overwrite=False):
         return cached_file
     except Exception as e:
         # remove lock file so download can be executed next time.
-        os.remove(os.path.join(model_dir, 'download.lock'))
-        sys.stderr.write('Failed to download from url %s' % url + '\n' + str(e) + '\n')
+        os.remove(os.path.join(model_dir, "download.lock"))
+        sys.stderr.write("Failed to download from url %s" % url + "\n" + str(e) + "\n")
         return None
 
-# %%
+
 class VGG(nn.Module):
-  ARCH = [64, 128, 'M', 256, 256, 'M', 512, 512, 'M', 512, 512, 'M']
+    ARCH = [64, 128, "M", 256, 256, "M", 512, 512, "M", 512, 512, "M"]
 
-  def __init__(self) -> None:
-    super().__init__()
+    def __init__(self) -> None:
+        super().__init__()
 
-    layers = []
-    counts = defaultdict(int)
+        layers = []
+        counts = defaultdict(int)
 
-    def add(name: str, layer: nn.Module) -> None:
-      layers.append((f"{name}{counts[name]}", layer))
-      counts[name] += 1
+        def add(name: str, layer: nn.Module) -> None:
+            layers.append((f"{name}{counts[name]}", layer))
+            counts[name] += 1
 
-    in_channels = 3
-    for x in self.ARCH:
-      if x != 'M':
-        # conv-bn-relu
-        add("conv", nn.Conv2d(in_channels, x, 3, padding=1, bias=False))
-        add("bn", nn.BatchNorm2d(x))
-        add("relu", nn.ReLU(True))
-        in_channels = x
-      else:
-        # maxpool
-        add("pool", nn.MaxPool2d(2))
+        in_channels = 3
+        for x in self.ARCH:
+            if x != "M":
+                # conv-bn-relu
+                add("conv", nn.Conv2d(in_channels, x, 3, padding=1, bias=False))
+                add("bn", nn.BatchNorm2d(x))
+                add("relu", nn.ReLU(True))
+                in_channels = x
+            else:
+                # maxpool
+                add("pool", nn.MaxPool2d(2))
 
-    self.backbone = nn.Sequential(OrderedDict(layers))
-    self.classifier = nn.Linear(512, 10)
+        self.backbone = nn.Sequential(OrderedDict(layers))
+        self.classifier = nn.Linear(512, 10)
 
-  def forward(self, x: torch.Tensor) -> torch.Tensor:
-    # backbone: [N, 3, 32, 32] => [N, 512, 2, 2]
-    x = self.backbone(x)
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # backbone: [N, 3, 32, 32] => [N, 512, 2, 2]
+        x = self.backbone(x)
 
-    # avgpool: [N, 512, 2, 2] => [N, 512]
-    x = x.mean([2, 3])
+        # avgpool: [N, 512, 2, 2] => [N, 512]
+        x = x.mean([2, 3])
 
-    # classifier: [N, 512] => [N, 10]
-    x = self.classifier(x)
-    return x
+        # classifier: [N, 512] => [N, 10]
+        x = self.classifier(x)
+        return x
 
-# %%
+
 def train(
-  model: nn.Module,
-  dataloader: DataLoader,
-  criterion: nn.Module,
-  optimizer: Optimizer,
-  scheduler: LambdaLR,
-  callbacks = None
+    model: nn.Module,
+    dataloader: DataLoader,
+    criterion: nn.Module,
+    optimizer: Optimizer,
+    scheduler: LambdaLR,
+    callbacks=None,
 ) -> None:
-  model.train()
+    model.train()
 
-  for inputs, targets in tqdm(dataloader, desc='train', leave=False):
-    # Move the data from CPU to GPU
-    inputs = inputs.cuda()
-    targets = targets.cuda()
+    for inputs, targets in tqdm(dataloader, desc="train", leave=False):
+        # Move the data from CPU to GPU
+        inputs = inputs.to("mps")
+        targets = targets.to("mps")
 
-    # Reset the gradients (from the last iteration)
-    optimizer.zero_grad()
+        # Reset the gradients (from the last iteration)
+        optimizer.zero_grad()
 
-    # Forward inference
-    outputs = model(inputs)
-    loss = criterion(outputs, targets)
+        # Forward inference
+        outputs = model(inputs)
+        loss = criterion(outputs, targets)
 
-    # Backward propagation
-    loss.backward()
+        # Backward propagation
+        loss.backward()
 
-    # Update optimizer and LR scheduler
-    optimizer.step()
-    scheduler.step()
+        # Update optimizer and LR scheduler
+        optimizer.step()
+        scheduler.step()
 
-    if callbacks is not None:
-        for callback in callbacks:
-            callback()
+        if callbacks is not None:
+            for callback in callbacks:
+                callback()
 
-# %%
+
 @torch.inference_mode()
 def evaluate(
-  model: nn.Module,
-  dataloader: DataLoader,
-  verbose=True,
+    model: nn.Module,
+    dataloader: DataLoader,
+    verbose=True,
 ) -> float:
-  model.eval()
+    model.eval()
+    num_samples = 0
+    num_correct = 0
+    for inputs, targets in tqdm(
+        dataloader, desc="eval", leave=False, disable=not verbose
+    ):
+        # Move the data from CPU to GPU
+        inputs = inputs.to("mps")
+        targets = targets.to("mps")
+        # Inference
+        outputs = model(inputs)
+        # Convert logits to class indices
+        outputs = outputs.argmax(dim=1)
+        # Update metrics
+        num_samples += targets.size(0)
+        num_correct += (outputs == targets).sum()
+    return (num_correct / num_samples * 100).item()
 
-  num_samples = 0
-  num_correct = 0
 
-  for inputs, targets in tqdm(dataloader, desc="eval", leave=False,
-                              disable=not verbose):
-    # Move the data from CPU to GPU
-    inputs = inputs.cuda()
-    targets = targets.cuda()
-
-    # Inference
-    outputs = model(inputs)
-
-    # Convert logits to class indices
-    outputs = outputs.argmax(dim=1)
-
-    # Update metrics
-    num_samples += targets.size(0)
-    num_correct += (outputs == targets).sum()
-
-  return (num_correct / num_samples * 100).item()
-
-# %% [markdown]
 # Helper Functions (Flops, Model Size calculation, etc.)
 
-# %%
+
 def get_model_macs(model, inputs) -> int:
     return profile_macs(model, inputs)
 
@@ -226,6 +173,7 @@ def get_model_sparsity(model: nn.Module) -> float:
         num_elements += param.numel()
     return 1 - float(num_nonzeros) / num_elements
 
+
 def get_num_parameters(model: nn.Module, count_nonzero_only=False) -> int:
     """
     calculate the total number of parameters of model
@@ -248,6 +196,7 @@ def get_model_size(model: nn.Module, data_width=32, count_nonzero_only=False) ->
     """
     return get_num_parameters(model, count_nonzero_only) * data_width
 
+
 Byte = 8
 KiB = 1024 * Byte
 MiB = 1024 * KiB
@@ -256,59 +205,77 @@ GiB = 1024 * MiB
 # %% [markdown]
 # Define misc functions for verification.
 
+
 # %%
 def test_fine_grained_prune(
-    test_tensor=torch.tensor([[-0.46, -0.40, 0.39, 0.19, 0.37],
-                              [0.00, 0.40, 0.17, -0.15, 0.16],
-                              [-0.20, -0.23, 0.36, 0.25, 0.03],
-                              [0.24, 0.41, 0.07, 0.13, -0.15],
-                              [0.48, -0.09, -0.36, 0.12, 0.45]]),
-    test_mask=torch.tensor([[True, True, False, False, False],
-                            [False, True, False, False, False],
-                            [False, False, False, False, False],
-                            [False, True, False, False, False],
-                            [True, False, False, False, True]]),
-    target_sparsity=0.75, target_nonzeros=None):
+    test_tensor=torch.tensor(
+        [
+            [-0.46, -0.40, 0.39, 0.19, 0.37],
+            [0.00, 0.40, 0.17, -0.15, 0.16],
+            [-0.20, -0.23, 0.36, 0.25, 0.03],
+            [0.24, 0.41, 0.07, 0.13, -0.15],
+            [0.48, -0.09, -0.36, 0.12, 0.45],
+        ]
+    ),
+    test_mask=torch.tensor(
+        [
+            [True, True, False, False, False],
+            [False, True, False, False, False],
+            [False, False, False, False, False],
+            [False, True, False, False, False],
+            [True, False, False, False, True],
+        ]
+    ),
+    target_sparsity=0.75,
+    target_nonzeros=None,
+):
     def plot_matrix(tensor, ax, title):
-        ax.imshow(tensor.cpu().numpy() == 0, vmin=0, vmax=1, cmap='tab20c')
+        ax.imshow(tensor.cpu().numpy() == 0, vmin=0, vmax=1, cmap="tab20c")
         ax.set_title(title)
         ax.set_yticklabels([])
         ax.set_xticklabels([])
         for i in range(tensor.shape[1]):
             for j in range(tensor.shape[0]):
-                text = ax.text(j, i, f'{tensor[i, j].item():.2f}',
-                                ha="center", va="center", color="k")
+                text = ax.text(
+                    j,
+                    i,
+                    f"{tensor[i, j].item():.2f}",
+                    ha="center",
+                    va="center",
+                    color="k",
+                )
 
     test_tensor = test_tensor.clone()
-    fig, axes = plt.subplots(1,2, figsize=(6, 10))
+    fig, axes = plt.subplots(1, 2, figsize=(6, 10))
     ax_left, ax_right = axes.ravel()
-    plot_matrix(test_tensor, ax_left, 'dense tensor')
+    plot_matrix(test_tensor, ax_left, "dense tensor")
 
     sparsity_before_pruning = get_sparsity(test_tensor)
     mask = fine_grained_prune(test_tensor, target_sparsity)
     sparsity_after_pruning = get_sparsity(test_tensor)
     sparsity_of_mask = get_sparsity(mask)
 
-    plot_matrix(test_tensor, ax_right, 'sparse tensor')
+    plot_matrix(test_tensor, ax_right, "sparse tensor")
     fig.tight_layout()
     plt.show()
 
-    print('* Test fine_grained_prune()')
-    print(f'    target sparsity: {target_sparsity:.2f}')
-    print(f'        sparsity before pruning: {sparsity_before_pruning:.2f}')
-    print(f'        sparsity after pruning: {sparsity_after_pruning:.2f}')
-    print(f'        sparsity of pruning mask: {sparsity_of_mask:.2f}')
+    print("* Test fine_grained_prune()")
+    print(f"    target sparsity: {target_sparsity:.2f}")
+    print(f"        sparsity before pruning: {sparsity_before_pruning:.2f}")
+    print(f"        sparsity after pruning: {sparsity_after_pruning:.2f}")
+    print(f"        sparsity of pruning mask: {sparsity_of_mask:.2f}")
 
     if target_nonzeros is None:
         if test_mask.equal(mask):
-            print('* Test passed.')
+            print("* Test passed.")
         else:
-            print('* Test failed.')
+            print("* Test failed.")
     else:
         if mask.count_nonzero() == target_nonzeros:
-            print('* Test passed.')
+            print("* Test passed.")
         else:
-            print('* Test failed.')
+            print("* Test failed.")
+
 
 # %% [markdown]
 # Load the pretrained model and the CIFAR-10 dataset.
@@ -316,38 +283,40 @@ def test_fine_grained_prune(
 # %%
 checkpoint_url = "https://hanlab18.mit.edu/files/course/labs/vgg.cifar.pretrained.pth"
 checkpoint = torch.load(download_url(checkpoint_url), map_location="cpu")
-model = VGG().cuda() # change this line if you want to run on CPU.
+model = VGG().to("mps")  # change this line if you want to run on CPU.
 print(f"=> loading checkpoint '{checkpoint_url}'")
-model.load_state_dict(checkpoint['state_dict'])
-recover_model = lambda: model.load_state_dict(checkpoint['state_dict'])
+model.load_state_dict(checkpoint["state_dict"])
+recover_model = lambda: model.load_state_dict(checkpoint["state_dict"])
 
 # %%
 image_size = 32
 transforms = {
-    "train": Compose([
-        RandomCrop(image_size, padding=4),
-        RandomHorizontalFlip(),
-        ToTensor(),
-    ]),
+    "train": Compose(
+        [
+            RandomCrop(image_size, padding=4),
+            RandomHorizontalFlip(),
+            ToTensor(),
+        ]
+    ),
     "test": ToTensor(),
 }
 dataset = {}
 for split in ["train", "test"]:
-  dataset[split] = CIFAR10(
-    root="data/cifar10",
-    train=(split == "train"),
-    download=True,
-    transform=transforms[split],
-  )
+    dataset[split] = CIFAR10(
+        root="data/cifar10",
+        train=(split == "train"),
+        download=True,
+        transform=transforms[split],
+    )
 dataloader = {}
-for split in ['train', 'test']:
-  dataloader[split] = DataLoader(
-    dataset[split],
-    batch_size=512,
-    shuffle=(split == 'train'),
-    num_workers=0,
-    pin_memory=True,
-  )
+for split in ["train", "test"]:
+    dataloader[split] = DataLoader(
+        dataset[split],
+        batch_size=512,
+        shuffle=(split == "train"),
+        num_workers=0,
+        pin_memory=True,
+    )
 
 # %% [markdown]
 # # Let's First Evaluate the Accuracy and Model Size of Dense Model
@@ -358,10 +327,10 @@ for split in ['train', 'test']:
 # Let's first evaluate the accuracy and model size of this model.
 
 # %%
-dense_model_accuracy = evaluate(model, dataloader['test'])
+dense_model_accuracy = evaluate(model, dataloader["test"])
 dense_model_size = get_model_size(model)
 print(f"dense model has accuracy={dense_model_accuracy:.2f}%")
-print(f"dense model has size={dense_model_size/MiB:.2f} MiB")
+print(f"dense model has size={dense_model_size / MiB:.2f} MiB")
 
 # %% [markdown]
 # While large neural networks are very powerful, their size consumes considerable storage, memory bandwidth, and computational resources.
@@ -379,9 +348,10 @@ print(f"dense model has size={dense_model_size/MiB:.2f} MiB")
 # %% [markdown]
 # Before we jump into pruning, let's see the distribution of weight values in the dense model.
 
+
 # %%
 def plot_weight_distribution(model, bins=256, count_nonzero_only=False):
-    fig, axes = plt.subplots(3,3, figsize=(10, 6))
+    fig, axes = plt.subplots(3, 3, figsize=(10, 6))
     axes = axes.ravel()
     plot_index = 0
     for name, param in model.named_parameters():
@@ -390,18 +360,23 @@ def plot_weight_distribution(model, bins=256, count_nonzero_only=False):
             if count_nonzero_only:
                 param_cpu = param.detach().view(-1).cpu()
                 param_cpu = param_cpu[param_cpu != 0].view(-1)
-                ax.hist(param_cpu, bins=bins, density=True,
-                        color = 'blue', alpha = 0.5)
+                ax.hist(param_cpu, bins=bins, density=True, color="blue", alpha=0.5)
             else:
-                ax.hist(param.detach().view(-1).cpu(), bins=bins, density=True,
-                        color = 'blue', alpha = 0.5)
+                ax.hist(
+                    param.detach().view(-1).cpu(),
+                    bins=bins,
+                    density=True,
+                    color="blue",
+                    alpha=0.5,
+                )
             ax.set_xlabel(name)
-            ax.set_ylabel('density')
+            ax.set_ylabel("density")
             plot_index += 1
-    fig.suptitle('Histogram of Weights')
+    fig.suptitle("Histogram of Weights")
     fig.tight_layout()
     fig.subplots_adjust(top=0.925)
     plt.show()
+
 
 plot_weight_distribution(model)
 
@@ -473,15 +448,16 @@ plot_weight_distribution(model)
 # * In step 3, we calculate the pruning `threshold` so that all synapses with importance smaller than `threshold` will be removed. Pytorch provides [`torch.kthvalue()`](https://pytorch.org/docs/stable/generated/torch.kthvalue.html), [`torch.Tensor.kthvalue()`](https://pytorch.org/docs/stable/generated/torch.Tensor.kthvalue.html), [`torch.topk()`](https://pytorch.org/docs/stable/generated/torch.topk.html) APIs.
 # * In step 4, we calculate the pruning `mask` based on the `threshold`. **1** in the `mask` indicates the synapse will be kept, and **0** in the `mask` indicates the synapse will be removed. `mask = importance > threshold`. Pytorch provides [`torch.gt()`](https://pytorch.org/docs/stable/generated/torch.gt.html?highlight=torch%20gt#torch.gt) API.
 
+
 # %%
-def fine_grained_prune(tensor: torch.Tensor, sparsity : float) -> torch.Tensor:
+def fine_grained_prune(tensor: torch.Tensor, sparsity: float) -> torch.Tensor:
     """
     magnitude-based pruning for single tensor
-    :param tensor: torch.(cuda.)Tensor, weight of conv/fc layer
+    :param tensor: torch..mps().)Tensor, weight of conv/fc layer
     :param sparsity: float, pruning sparsity
         sparsity = #zeros / #elements = 1 - #nonzeros / #elements
     :return:
-        torch.(cuda.)Tensor, mask for zeros
+        torch.mps().)Tensor, mask for zeros
     """
     sparsity = min(max(0.0, sparsity), 1.0)
     if sparsity == 1.0:
@@ -502,7 +478,7 @@ def fine_grained_prune(tensor: torch.Tensor, sparsity : float) -> torch.Tensor:
     if num_zeros > 0:
         threshold = torch.kthvalue(importance.view(-1), num_zeros).values
     else:
-        threshold = torch.zeros_like(tensor) # Should not happen if sparsity > 0
+        threshold = torch.zeros_like(tensor)  # Should not happen if sparsity > 0
 
     # Step 4: get binary mask (1 for nonzeros, 0 for zeros)
     mask = torch.gt(importance, threshold).float()
@@ -516,12 +492,12 @@ def fine_grained_prune(tensor: torch.Tensor, sparsity : float) -> torch.Tensor:
     if num_nonzeros < num_elements:
         # Check if the number of weights greater than the threshold is already the target non-zeros
         if torch.sum(mask) > num_nonzeros:
-             # This should not happen with torch.gt based on the kth value definition,
-             # but is included as a safety check if there are ties at the threshold that were not counted correctly.
-             # The most common issue is that torch.gt(importance, threshold) returns too many ones
-             # if there are multiple values equal to the threshold.
+            # This should not happen with torch.gt based on the kth value definition,
+            # but is included as a safety check if there are ties at the threshold that were not counted correctly.
+            # The most common issue is that torch.gt(importance, threshold) returns too many ones
+            # if there are multiple values equal to the threshold.
 
-             # Find all elements equal to the threshold
+            # Find all elements equal to the threshold
             ties = torch.eq(importance, threshold)
 
             # Count how many non-zeros are needed to be set to zero
@@ -532,7 +508,7 @@ def fine_grained_prune(tensor: torch.Tensor, sparsity : float) -> torch.Tensor:
 
             # Only set the required number of ties to zero
             if zeros_to_add > 0:
-                 # Check if there are enough ties to make up the difference
+                # Check if there are enough ties to make up the difference
                 if zeros_to_add <= tie_indices.size(0):
                     # Set the first 'zeros_to_add' ties to zero in the mask
                     for i in range(zeros_to_add):
@@ -577,13 +553,13 @@ def fine_grained_prune(tensor: torch.Tensor, sparsity : float) -> torch.Tensor:
                     # Reshape back
                     mask = mask_flat.view(mask.shape)
 
-
     ##################### YOUR CODE ENDS HERE #######################
 
     # Step 5: apply mask to prune the tensor
     tensor.mul_(mask)
 
     return mask
+
 
 # %% [markdown]
 # Let's verify the functionality of defined fine-grained pruning by applying the function above on a dummy tensor.
@@ -609,6 +585,7 @@ test_fine_grained_prune(target_sparsity=target_sparsity, target_nonzeros=10)
 # %% [markdown]
 # We now wrap the fine-grained pruning function into a class for pruning the whole model. In class `FineGrainedPruner`, we have to keep a record of the pruning masks so that we could apply the masks whenever the model weights change to make sure the model keep sparse all the time.
 
+
 # %%
 class FineGrainedPruner:
     def __init__(self, model, sparsity_dict):
@@ -625,9 +602,10 @@ class FineGrainedPruner:
     def prune(model, sparsity_dict):
         masks = dict()
         for name, param in model.named_parameters():
-            if param.dim() > 1: # we only prune conv and fc weights
+            if param.dim() > 1:  # we only prune conv and fc weights
                 masks[name] = fine_grained_prune(param, sparsity_dict[name])
         return masks
+
 
 # %% [markdown]
 # ## Sensitivity Scan
@@ -648,40 +626,53 @@ class FineGrainedPruner:
 # %% [markdown]
 # The following code cell defines the sensitivity scan function that returns the sparsities scanned, and a list of accuracies for each weight to be pruned.
 
+
 # %%
 @torch.no_grad()
-def sensitivity_scan(model, dataloader, scan_step=0.1, scan_start=0.4, scan_end=1.0, verbose=True):
+def sensitivity_scan(
+    model, dataloader, scan_step=0.1, scan_start=0.4, scan_end=1.0, verbose=True
+):
     sparsities = np.arange(start=scan_start, stop=scan_end, step=scan_step)
     accuracies = []
-    named_conv_weights = [(name, param) for (name, param) \
-                          in model.named_parameters() if param.dim() > 1]
+    named_conv_weights = [
+        (name, param) for (name, param) in model.named_parameters() if param.dim() > 1
+    ]
     for i_layer, (name, param) in enumerate(named_conv_weights):
         param_clone = param.detach().clone()
         accuracy = []
-        for sparsity in tqdm(sparsities, desc=f'scanning {i_layer}/{len(named_conv_weights)} weight - {name}'):
+        for sparsity in tqdm(
+            sparsities,
+            desc=f"scanning {i_layer}/{len(named_conv_weights)} weight - {name}",
+        ):
             fine_grained_prune(param.detach(), sparsity=sparsity)
             acc = evaluate(model, dataloader, verbose=False)
             if verbose:
-                print(f'\r    sparsity={sparsity:.2f}: accuracy={acc:.2f}%', end='')
+                print(f"\r    sparsity={sparsity:.2f}: accuracy={acc:.2f}%", end="")
             # restore
             param.copy_(param_clone)
             accuracy.append(acc)
         if verbose:
-            print(f'\r    sparsity=[{",".join(["{:.2f}".format(x) for x in sparsities])}]: accuracy=[{", ".join(["{:.2f}%".format(x) for x in accuracy])}]', end='')
+            print(
+                f"\r    sparsity=[{','.join(['{:.2f}'.format(x) for x in sparsities])}]: accuracy=[{', '.join(['{:.2f}%'.format(x) for x in accuracy])}]",
+                end="",
+            )
         accuracies.append(accuracy)
     return sparsities, accuracies
+
 
 # %% [markdown]
 # Please run the following cells to plot the sensitivity curves. It should take around 2 minutes to finish.
 
 # %%
 sparsities, accuracies = sensitivity_scan(
-    model, dataloader['test'], scan_step=0.1, scan_start=0.4, scan_end=1.0)
+    model, dataloader["test"], scan_step=0.1, scan_start=0.4, scan_end=1.0
+)
+
 
 # %%
 def plot_sensitivity_scan(sparsities, accuracies, dense_model_accuracy):
     lower_bound_accuracy = 100 - (100 - dense_model_accuracy) * 1.5
-    fig, axes = plt.subplots(3, int(math.ceil(len(accuracies) / 3)),figsize=(15,8))
+    fig, axes = plt.subplots(3, int(math.ceil(len(accuracies) / 3)), figsize=(15, 8))
     axes = axes.ravel()
     plot_index = 0
     for name, param in model.named_parameters():
@@ -692,18 +683,21 @@ def plot_sensitivity_scan(sparsities, accuracies, dense_model_accuracy):
             ax.set_xticks(np.arange(start=0.4, stop=1.0, step=0.1))
             ax.set_ylim(80, 95)
             ax.set_title(name)
-            ax.set_xlabel('sparsity')
-            ax.set_ylabel('top-1 accuracy')
-            ax.legend([
-                'accuracy after pruning',
-                f'{lower_bound_accuracy / dense_model_accuracy * 100:.0f}% of dense model accuracy'
-            ])
-            ax.grid(axis='x')
+            ax.set_xlabel("sparsity")
+            ax.set_ylabel("top-1 accuracy")
+            ax.legend(
+                [
+                    "accuracy after pruning",
+                    f"{lower_bound_accuracy / dense_model_accuracy * 100:.0f}% of dense model accuracy",
+                ]
+            )
+            ax.grid(axis="x")
             plot_index += 1
-    fig.suptitle('Sensitivity Curves: Validation Accuracy vs. Pruning Sparsity')
+    fig.suptitle("Sensitivity Curves: Validation Accuracy vs. Pruning Sparsity")
     fig.tight_layout()
     fig.subplots_adjust(top=0.925)
     plt.show()
+
 
 plot_sensitivity_scan(sparsities, accuracies, dense_model_accuracy)
 
@@ -742,6 +736,7 @@ plot_sensitivity_scan(sparsities, accuracies, dense_model_accuracy)
 #
 # Please run the following code cell to plot the distribution of #parameters in the whole model.
 
+
 # %%
 def plot_num_parameters_distribution(model):
     num_parameters = dict()
@@ -749,13 +744,14 @@ def plot_num_parameters_distribution(model):
         if param.dim() > 1:
             num_parameters[name] = param.numel()
     fig = plt.figure(figsize=(8, 6))
-    plt.grid(axis='y')
+    plt.grid(axis="y")
     plt.bar(list(num_parameters.keys()), list(num_parameters.values()))
-    plt.title('#Parameter Distribution')
-    plt.ylabel('Number of Parameters')
+    plt.title("#Parameter Distribution")
+    plt.ylabel("Number of Parameters")
     plt.xticks(rotation=60)
     plt.tight_layout()
     plt.show()
+
 
 plot_num_parameters_distribution(model)
 
@@ -781,26 +777,25 @@ plot_num_parameters_distribution(model)
 recover_model()
 
 sparsity_dict = {
-##################### YOUR CODE STARTS HERE #####################
+    ##################### YOUR CODE STARTS HERE #####################
     # Target compression ratio: 25% (or 75% sparsity overall)
     # The layers with the most parameters are conv5, conv6, conv7, conv8, and classifier.
     # conv8 is the most sensitive. conv7 is very sensitive at high sparsity.
     # We must assign higher sparsity to the layers with many parameters (conv5-8, classifier)
     # but avoid high sparsity for the most sensitive ones.
-
     # Low parameter count, low/medium sensitivity
-    'backbone.conv0.weight': 0.70, # Sparsity 70%
-    'backbone.conv1.weight': 0.70,
-    'backbone.conv2.weight': 0.70,
-    'backbone.conv3.weight': 0.70,
+    "backbone.conv0.weight": 0.70,  # Sparsity 70%
+    "backbone.conv1.weight": 0.70,
+    "backbone.conv2.weight": 0.70,
+    "backbone.conv3.weight": 0.70,
     # High parameter count, medium sensitivity
-    'backbone.conv4.weight': 0.75,
-    'backbone.conv5.weight': 0.78,
-    'backbone.conv6.weight': 0.80, # Highest parameter count, can take high sparsity
-    'backbone.conv7.weight': 0.70, # Sensitive at high sparsity, keep lower
+    "backbone.conv4.weight": 0.75,
+    "backbone.conv5.weight": 0.78,
+    "backbone.conv6.weight": 0.80,  # Highest parameter count, can take high sparsity
+    "backbone.conv7.weight": 0.70,  # Sensitive at high sparsity, keep lower
     # Classifier has high parameters and is very sensitive
-    'classifier.weight': 0.70
-##################### YOUR CODE ENDS HERE #####################
+    "classifier.weight": 0.70,
+    ##################### YOUR CODE ENDS HERE #####################
 }
 
 # %% [markdown]
@@ -808,17 +803,19 @@ sparsity_dict = {
 
 # %%
 pruner = FineGrainedPruner(model, sparsity_dict)
-print(f'After pruning with sparsity dictionary')
+print(f"After pruning with sparsity dictionary")
 for name, sparsity in sparsity_dict.items():
-    print(f'  {name}: {sparsity:.2f}')
-print(f'The sparsity of each layer becomes')
+    print(f"  {name}: {sparsity:.2f}")
+print(f"The sparsity of each layer becomes")
 for name, param in model.named_parameters():
     if name in sparsity_dict:
-        print(f'  {name}: {get_sparsity(param):.2f}')
+        print(f"  {name}: {get_sparsity(param):.2f}")
 
 sparse_model_size = get_model_size(model, count_nonzero_only=True)
-print(f"Sparse model has size={sparse_model_size / MiB:.2f} MiB = {sparse_model_size / dense_model_size * 100:.2f}% of dense model size")
-sparse_model_accuracy = evaluate(model, dataloader['test'])
+print(
+    f"Sparse model has size={sparse_model_size / MiB:.2f} MiB = {sparse_model_size / dense_model_size * 100:.2f}% of dense model size"
+)
+sparse_model_accuracy = evaluate(model, dataloader["test"])
 print(f"Sparse model has accuracy={sparse_model_accuracy:.2f}% before fintuning")
 
 plot_weight_distribution(model, count_nonzero_only=True)
@@ -833,34 +830,46 @@ plot_weight_distribution(model, count_nonzero_only=True)
 
 # %%
 num_finetune_epochs = 5
-optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9, weight_decay=1e-4)
+optimizer = torch.optim.SGD(
+    model.parameters(), lr=0.01, momentum=0.9, weight_decay=1e-4
+)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, num_finetune_epochs)
 criterion = nn.CrossEntropyLoss()
 
 best_sparse_model_checkpoint = dict()
 best_accuracy = 0
-print(f'Finetuning Fine-grained Pruned Sparse Model')
+print(f"Finetuning Fine-grained Pruned Sparse Model")
 for epoch in range(num_finetune_epochs):
     # At the end of each train iteration, we have to apply the pruning mask
     #    to keep the model sparse during the training
-    train(model, dataloader['train'], criterion, optimizer, scheduler,
-          callbacks=[lambda: pruner.apply(model)])
-    accuracy = evaluate(model, dataloader['test'])
+    train(
+        model,
+        dataloader["train"],
+        criterion,
+        optimizer,
+        scheduler,
+        callbacks=[lambda: pruner.apply(model)],
+    )
+    accuracy = evaluate(model, dataloader["test"])
     is_best = accuracy > best_accuracy
     if is_best:
-        best_sparse_model_checkpoint['state_dict'] = copy.deepcopy(model.state_dict())
+        best_sparse_model_checkpoint["state_dict"] = copy.deepcopy(model.state_dict())
         best_accuracy = accuracy
-    print(f'    Epoch {epoch+1} Accuracy {accuracy:.2f}% / Best Accuracy: {best_accuracy:.2f}%')
+    print(
+        f"    Epoch {epoch + 1} Accuracy {accuracy:.2f}% / Best Accuracy: {best_accuracy:.2f}%"
+    )
 
 # %% [markdown]
 # Run the following cell to see the information of best finetuned sparse model.
 
 # %%
 # load the best sparse model checkpoint to evaluate the final performance
-model.load_state_dict(best_sparse_model_checkpoint['state_dict'])
+model.load_state_dict(best_sparse_model_checkpoint["state_dict"])
 sparse_model_size = get_model_size(model, count_nonzero_only=True)
-print(f"Sparse model has size={sparse_model_size / MiB:.2f} MiB = {sparse_model_size / dense_model_size * 100:.2f}% of dense model size")
-sparse_model_accuracy = evaluate(model, dataloader['test'])
+print(
+    f"Sparse model has size={sparse_model_size / MiB:.2f} MiB = {sparse_model_size / dense_model_size * 100:.2f}% of dense model size"
+)
+sparse_model_accuracy = evaluate(model, dataloader["test"])
 print(f"Sparse model has accuracy={sparse_model_accuracy:.2f}% after fintuning")
 
 # %% [markdown]
@@ -872,7 +881,7 @@ print(f"Sparse model has accuracy={sparse_model_accuracy:.2f}% after fintuning")
 # firstly, let's restore the model weights to the original dense version
 #   and check the validation accuracy
 recover_model()
-dense_model_accuracy = evaluate(model, dataloader['test'])
+dense_model_accuracy = evaluate(model, dataloader["test"])
 print(f"dense model has accuracy={dense_model_accuracy:.2f}%")
 
 # %% [markdown]
@@ -895,6 +904,7 @@ print(f"dense model has accuracy={dense_model_accuracy:.2f}%")
 #
 # Here we naively prune all output channels other than the first $\#\mathrm{out\_channels}_{\mathrm{new}}$ channels.
 
+
 # %%
 def get_num_channels_to_keep(channels: int, prune_ratio: float) -> int:
     """A function to calculate the number of layers to PRESERVE after pruning
@@ -905,9 +915,9 @@ def get_num_channels_to_keep(channels: int, prune_ratio: float) -> int:
     return int(round(channels * preserve_rate))
     ##################### YOUR CODE ENDS HERE #####################
 
+
 @torch.no_grad()
-def channel_prune(model: nn.Module,
-                  prune_ratio: Union[List, float]) -> nn.Module:
+def channel_prune(model: nn.Module, prune_ratio: Union[List, float]) -> nn.Module:
     """Apply channel pruning to each of the conv layer in the backbone
     Note that for prune_ratio, we can either provide a floating-point number,
     indicating that we use a uniform pruning rate for all layers, or a list of
@@ -962,11 +972,11 @@ def channel_prune(model: nn.Module,
 # Run the following cell to perform a sanity check to make sure the implementation is correct.
 
 # %%
-dummy_input = torch.randn(1, 3, 32, 32).cuda()
+dummy_input = torch.randn(1, 3, 32, 32).to("mps")
 pruned_model = channel_prune(model, prune_ratio=0.3)
 pruned_macs = get_model_macs(pruned_model, dummy_input)
 assert pruned_macs == 305388064
-print('* Check passed. Right MACs for the pruned model.')
+print("* Check passed. Right MACs for the pruned model.")
 
 # %% [markdown]
 # Now let's evaluate the performance of the model after uniform channel pruning with 30% pruning rate.
@@ -974,7 +984,7 @@ print('* Check passed. Right MACs for the pruned model.')
 # As you may see, directly removing 30% of the channels leads to low accuracy.
 
 # %%
-pruned_model_accuracy = evaluate(pruned_model, dataloader['test'])
+pruned_model_accuracy = evaluate(pruned_model, dataloader["test"])
 print(f"pruned model has accuracy={pruned_model_accuracy:.2f}%")
 
 # %% [markdown]
@@ -993,6 +1003,7 @@ print(f"pruned model has accuracy={pruned_model_accuracy:.2f}%")
 # **Hint**:
 # * To calculate Frobenius norm of a tensor, Pytorch provides [`torch.norm`](https://pytorch.org/docs/master/generated/torch.norm.html?highlight=torch+norm#torch.norm) APIs.
 
+
 # %%
 # function to sort the channels from important to non-important
 def get_input_channel_importance(weight):
@@ -1009,6 +1020,7 @@ def get_input_channel_importance(weight):
         ##################### YOUR CODE ENDS HERE #####################
         importances.append(importance.view(1))
     return torch.cat(importances)
+
 
 @torch.no_grad()
 def apply_channel_sorting(model):
@@ -1036,11 +1048,12 @@ def apply_channel_sorting(model):
         # sort_idx is over the input channels of next_conv
 
         # Sort output dimension of prev_conv
-        prev_conv.weight.copy_(torch.index_select(
-            prev_conv.weight.detach(), 0, sort_idx))
+        prev_conv.weight.copy_(
+            torch.index_select(prev_conv.weight.detach(), 0, sort_idx)
+        )
 
         # Sort prev_bn parameters
-        for tensor_name in ['weight', 'bias', 'running_mean', 'running_var']:
+        for tensor_name in ["weight", "bias", "running_mean", "running_var"]:
             tensor_to_apply = getattr(prev_bn, tensor_name)
             tensor_to_apply.copy_(
                 torch.index_select(tensor_to_apply.detach(), 0, sort_idx)
@@ -1049,29 +1062,31 @@ def apply_channel_sorting(model):
         # apply to the next conv input (hint: one line of code)
         ##################### YOUR CODE STARTS HERE #####################
         # Sort input dimension of next_conv
-        next_conv.weight.copy_(torch.index_select(
-            next_conv.weight.detach(), 1, sort_idx))
+        next_conv.weight.copy_(
+            torch.index_select(next_conv.weight.detach(), 1, sort_idx)
+        )
         ##################### YOUR CODE ENDS HERE #####################
 
     return model
+
 
 # %% [markdown]
 # Now run the following cell to sanity check if the results are correct.
 
 # %%
-print('Before sorting...')
-dense_model_accuracy = evaluate(model, dataloader['test'])
+print("Before sorting...")
+dense_model_accuracy = evaluate(model, dataloader["test"])
 print(f"dense model has accuracy={dense_model_accuracy:.2f}%")
 
-print('After sorting...')
+print("After sorting...")
 sorted_model = apply_channel_sorting(model)
-sorted_model_accuracy = evaluate(sorted_model, dataloader['test'])
+sorted_model_accuracy = evaluate(sorted_model, dataloader["test"])
 print(f"sorted model has accuracy={sorted_model_accuracy:.2f}%")
 
 # make sure accuracy does not change after sorting, since it is
 # equivalent transform
 assert abs(sorted_model_accuracy - dense_model_accuracy) < 0.1
-print('* Check passed.')
+print("* Check passed.")
 
 # %% [markdown]
 # Finally, we compare the pruned models' accuracy with and without sorting.
@@ -1081,14 +1096,14 @@ channel_pruning_ratio = 0.3  # pruned-out ratio
 
 print(" * Without sorting...")
 pruned_model = channel_prune(model, channel_pruning_ratio)
-pruned_model_accuracy = evaluate(pruned_model, dataloader['test'])
+pruned_model_accuracy = evaluate(pruned_model, dataloader["test"])
 print(f"pruned model has accuracy={pruned_model_accuracy:.2f}%")
 
 
 print(" * With sorting...")
 sorted_model = apply_channel_sorting(model)
 pruned_model = channel_prune(sorted_model, channel_pruning_ratio)
-pruned_model_accuracy = evaluate(pruned_model, dataloader['test'])
+pruned_model_accuracy = evaluate(pruned_model, dataloader["test"])
 print(f"pruned model has accuracy={pruned_model_accuracy:.2f}%")
 
 
@@ -1097,23 +1112,28 @@ print(f"pruned model has accuracy={pruned_model_accuracy:.2f}%")
 
 # %%
 num_finetune_epochs = 5
-optimizer = torch.optim.SGD(pruned_model.parameters(), lr=0.01, momentum=0.9, weight_decay=1e-4)
+optimizer = torch.optim.SGD(
+    pruned_model.parameters(), lr=0.01, momentum=0.9, weight_decay=1e-4
+)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, num_finetune_epochs)
 criterion = nn.CrossEntropyLoss()
 
 best_accuracy = 0
 for epoch in range(num_finetune_epochs):
-    train(pruned_model, dataloader['train'], criterion, optimizer, scheduler)
-    accuracy = evaluate(pruned_model, dataloader['test'])
+    train(pruned_model, dataloader["train"], criterion, optimizer, scheduler)
+    accuracy = evaluate(pruned_model, dataloader["test"])
     is_best = accuracy > best_accuracy
     if is_best:
         best_accuracy = accuracy
-    print(f'Epoch {epoch+1} Accuracy {accuracy:.2f}% / Best Accuracy: {best_accuracy:.2f}%')
+    print(
+        f"Epoch {epoch + 1} Accuracy {accuracy:.2f}% / Best Accuracy: {best_accuracy:.2f}%"
+    )
 
 # %% [markdown]
 # ## Measure acceleration from pruning
 #
 # After fine-tuning, the model almost recovers the accuracy. You may have already learned that channel pruning is usually more difficult to recover accuracy compared to fine-grained pruning. However, it directly leads to a smaller model size and smaller computation without specialized model format. It can also run faster on GPUs. Now we compare the model size, computation, and latency of the pruned model.
+
 
 # %%
 # helper functions to measure latency of a regular PyTorch models.
@@ -1132,41 +1152,54 @@ def measure_latency(model, dummy_input, n_warmup=20, n_test=100):
     t2 = time.time()
     return (t2 - t1) / n_test  # average latency
 
+
 table_template = "{:<15} {:<15} {:<15} {:<15}"
-print (table_template.format('', 'Original','Pruned','Reduction Ratio'))
+print(table_template.format("", "Original", "Pruned", "Reduction Ratio"))
 
 # 1. measure the latency of the original model and the pruned model on CPU
 #   which simulates inference on an edge device
-dummy_input = torch.randn(1, 3, 32, 32).to('cpu')
-pruned_model = pruned_model.to('cpu')
-model = model.to('cpu')
+dummy_input = torch.randn(1, 3, 32, 32).to("cpu")
+pruned_model = pruned_model.to("cpu")
+model = model.to("cpu")
 
 pruned_latency = measure_latency(pruned_model, dummy_input)
 original_latency = measure_latency(model, dummy_input)
-print(table_template.format('Latency (ms)',
-                            round(original_latency * 1000, 1),
-                            round(pruned_latency * 1000, 1),
-                            round(original_latency / pruned_latency, 1)))
+print(
+    table_template.format(
+        "Latency (ms)",
+        round(original_latency * 1000, 1),
+        round(pruned_latency * 1000, 1),
+        round(original_latency / pruned_latency, 1),
+    )
+)
 
 # 2. measure the computation (MACs)
 original_macs = get_model_macs(model, dummy_input)
 pruned_macs = get_model_macs(pruned_model, dummy_input)
-print(table_template.format('MACs (M)',
-                            round(original_macs / 1e6),
-                            round(pruned_macs / 1e6),
-                            round(original_macs / pruned_macs, 1)))
+print(
+    table_template.format(
+        "MACs (M)",
+        round(original_macs / 1e6),
+        round(pruned_macs / 1e6),
+        round(original_macs / pruned_macs, 1),
+    )
+)
 
 # 3. measure the model size (params)
 original_param = get_num_parameters(model)
 pruned_param = get_num_parameters(pruned_model)
-print(table_template.format('Param (M)',
-                            round(original_param / 1e6, 2),
-                            round(pruned_param / 1e6, 2),
-                            round(original_param / pruned_param, 1)))
+print(
+    table_template.format(
+        "Param (M)",
+        round(original_param / 1e6, 2),
+        round(pruned_param / 1e6, 2),
+        round(original_param / pruned_param, 1),
+    )
+)
 
-# put model back to cuda
-pruned_model = pruned_model.to('cuda')
-model = model.to('cuda')
+# put model back to.mps()
+pruned_model = pruned_model.to("mps")
+model = model.to("mps")
 
 # %% [markdown]
 # ### Question 8 (10 pts)

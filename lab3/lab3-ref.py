@@ -10,6 +10,9 @@
 #
 
 # %% [markdown]
+# Please fill out this [feedback form](https://forms.gle/8gY5n9w1K3gddVoX9) when you finished this lab. We would love to hear your thoughts or feedback on how we can improve this lab!
+
+# %% [markdown]
 # ## Goals
 #
 # In this assignment, you will practice pruning a classical neural network model to reduce both model size and latency. The goals of this assignment are as follows:
@@ -35,6 +38,33 @@
 
 # %% [markdown]
 # First, install the required packages and download the datasets and pretrained model. Here we use CIFAR10 dataset and VGG network which is the same as what we used in the Lab 0 tutorial.
+
+# %%
+print('Installing torchprofile...')
+!pip install torchprofile 1>/dev/null
+print('All required packages have been successfully installed!')
+
+# %%
+import copy
+import math
+import random
+import time
+from collections import OrderedDict, defaultdict
+from typing import Union, List
+
+import numpy as np
+import torch
+from matplotlib import pyplot as plt
+from torch import nn
+from torch.optim import *
+from torch.optim.lr_scheduler import *
+from torch.utils.data import DataLoader
+from torchprofile import profile_macs
+from torchvision.datasets import *
+from torchvision.transforms import *
+from tqdm.auto import tqdm
+
+from torchprofile import profile_macs
 
 assert torch.cuda.is_available(), # change this line if you want to run on CPU.
 
@@ -98,7 +128,7 @@ class VGG(nn.Module):
     # backbone: [N, 3, 32, 32] => [N, 512, 2, 2]
     x = self.backbone(x)
 
-    # avgpool: [N, 512, 2, 2] => [N, 512]
+    # avgpool: [N, 512, 2, 2] => [N,/ 512]
     x = x.mean([2, 3])
 
     # classifier: [N, 512] => [N, 10]
