@@ -1,0 +1,15 @@
+# Core PyTorch and related libraries
+torch==2.3.1
+torchvision==0.18.1
+
+# Scientific Computing / Data Handling
+numpy==1.26.4
+matplotlib==3.10.7
+
+# Utilities
+tqdm==4.67.1
+psutil==7.1.3
+
+# Quantization Specific Libraries
+torchprofile==0.0.4
+fast-pytorch-kmeans==0.2.2
