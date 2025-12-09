@@ -683,6 +683,8 @@ def quantized_linear(
     ############### YOUR CODE STARTS HERE ###############
     # Step 2: scale the output: scale_factor = (S_input * S_weight) / S_output
     scale_factor = (input_scale * weight_scale) / output_scale
+    # Added for shape error
+    scale_factor = scale_factor.view(1, -1)
     output = output.float() * scale_factor
 
     # Step 3: shift output by output_zero_point
