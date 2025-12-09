@@ -1,2 +1,17 @@
-lab3/data/
-lab4/data/
+# Model files
+*.pth
+*.pt
+*.h5
+*.ckpt
+*.pb
+
+# Data files
+*.csv
+*.json
+data/
+datasets/
+
+# Large binaries
+*.bin
+*.pkl
+*.pickle
