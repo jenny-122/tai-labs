@@ -9,6 +9,7 @@
 *.csv
 *.json
 data/
+data-*/
 datasets/
 
 # Large binaries
@@ -21,3 +22,16 @@ datasets/
 
 # Images
 *.png
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# OS files
+.DS_Store
+
+# Logs
+*.log
