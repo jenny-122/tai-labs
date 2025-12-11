@@ -1,0 +1,78 @@
+Using device: cuda
+=> loading checkpoint 'https://hanlab18.mit.edu/files/course/labs/vgg.cifar.pretrained.pth'
+fp32 model has accuracy=92.95%
+fp32 model has size=35.20 MiB
+
+--- Q1 Verification ---
+Running k-means quantization test...
+  Target bitwidth: 2 bits
+  Unique values before: 25
+  Unique values after: 4
+Test passed.
+
+--- K-Means Quantization Results ---
+Note that the storage for codebooks is ignored when calculating the model size.
+k-means quantizing model into 8 bits
+    8-bit k-means quantized model has size=8.80 MiB
+    8-bit k-means quantized model has accuracy=92.84% before QAT 
+k-means quantizing model into 4 bits
+    4-bit k-means quantized model has size=4.40 MiB
+    4-bit k-means quantized model has accuracy=85.93% before QAT 
+k-means quantizing model into 2 bits
+    2-bit k-means quantized model has size=2.20 MiB
+    2-bit k-means quantized model has accuracy=11.85% before QAT 
+
+--- K-Means Quantization-Aware Training (QAT) ---
+
+8-bit QAT status (Initial drop: 0.11%)
+    No need for QAT.
+
+4-bit QAT status (Initial drop: 7.02%)
+    Quantization-aware training starting...
+        Epoch 1 Accuracy 92.25% / Best Accuracy: 92.25%
+        Epoch 2 Accuracy 92.57% / Best Accuracy: 92.57%
+
+2-bit QAT status (Initial drop: 81.10%)
+    Quantization-aware training starting...
+        Epoch 1 Accuracy 90.23% / Best Accuracy: 90.23%
+        Epoch 2 Accuracy 90.77% / Best Accuracy: 90.77%
+        Epoch 3 Accuracy 91.08% / Best Accuracy: 91.08%
+        Epoch 4 Accuracy 91.19% / Best Accuracy: 91.19%
+        Epoch 5 Accuracy 91.27% / Best Accuracy: 91.27%
+
+--- Q4 Verification ---
+Running linear quantization test...
+Test passed.
+
+--- Q5 Peek at Weight Distribution (No plot generated) ---
+  Finished peek for 4-bit quantization.
+  Finished peek for 2-bit quantization.
+Peek complete.
+
+--- Q7 Verification ---
+Running quantized_fc() test...
+Test passed.
+
+--- Q9.1: PTQ and Preprocessing ---
+Before conv-bn fusion: backbone length 29
+After conv-bn fusion: backbone length 21
+Accuracy of the fused model=92.95%
+VGG(
+  (backbone): Sequential(
+    (0): QuantizedConv2d()
+    (1): QuantizedConv2d()
+    (2): QuantizedMaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+    (3): QuantizedConv2d()
+    (4): QuantizedConv2d()
+    (5): QuantizedMaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+    (6): QuantizedConv2d()
+    (7): QuantizedConv2d()
+    (8): QuantizedMaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+    (9): QuantizedConv2d()
+    (10): QuantizedConv2d()
+    (11): QuantizedMaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+    (12): QuantizedAvgPool2d(kernel_size=2, stride=2, padding=0)
+  )
+  (classifier): QuantizedLinear()
+)
+int8 model has accuracy=35.97%
