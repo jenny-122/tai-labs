@@ -1,0 +1,48 @@
+Lab 7: Energy and Latency Experiment Results
+=============================================
+
+This lab measures energy consumption and latency for different
+prefill token (PT) and generation token (GT) configurations.
+
+Experimental Parameters:
+- Prefill Tokens (PT): 64, 256, 512, 1024
+- Generation Tokens (GT): 16, 64, 128
+- Trials per configuration: 3
+
+Results Summary (averaged across trials):
+-----------------------------------------
+
+PT=64:
+  GT=16:  Energy=8410.93 mJ, Latency=0.56s
+  GT=64:  Energy=9492.27 mJ, Latency=0.63s
+  GT=128: Energy=19325.07 mJ, Latency=1.29s
+
+PT=256:
+  GT=16:  Energy=2956.43 mJ, Latency=0.20s
+  GT=64:  Energy=9161.23 mJ, Latency=0.61s
+  GT=128: Energy=19475.53 mJ, Latency=1.30s
+
+PT=512:
+  GT=16:  Energy=3130.40 mJ, Latency=0.21s
+  GT=64:  Energy=9249.72 mJ, Latency=0.62s
+  GT=128: Energy=18780.58 mJ, Latency=1.25s
+
+PT=1024:
+  GT=16:  Energy=4195.88 mJ, Latency=0.28s
+  GT=64:  Energy=9441.47 mJ, Latency=0.63s
+  GT=128: Energy=18840.77 mJ, Latency=1.26s
+
+Key Observations:
+-----------------
+1. Energy consumption scales roughly linearly with generation tokens (GT)
+2. Prefill token count (PT) has less impact on total energy than GT
+3. Latency follows similar trends to energy consumption
+4. First trial often shows higher energy due to warmup effects
+
+Generated Plots:
+- plots/energy_vs_gt.png - Energy vs Generation Tokens
+- plots/energy_vs_pt.png - Energy vs Prefill Tokens
+- plots/latency_vs_pt.png - Latency vs Prefill Tokens
+- plots/predicted_vs_measured.png - Model prediction accuracy
+
+Raw data available in: energy_results.csv
